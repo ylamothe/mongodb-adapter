@@ -26,7 +26,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/network/connstring"
 )
 
 // CasbinRule represents a rule in Casbin.
@@ -43,10 +42,23 @@ type CasbinRule struct {
 // adapter represents the MongoDB adapter for policy storage.
 type adapter struct {
 	client       *mongo.Client
-	database     *mongo.Database
 	collection   *mongo.Collection
 	databaseName string
 	filtered     bool
+}
+
+// DBName sets the name of the database to be used by casbin
+func DBName(databaseName string) func(*adapter) {
+	return func(a *adapter) {
+		a.databaseName = databaseName
+	}
+}
+
+// Filtered sets flags for filtered policy
+func Filtered(filtered bool) func(*adapter) {
+	return func(a *adapter) {
+		a.filtered = filtered
+	}
 }
 
 // finalizer is the destructor for adapter.
@@ -54,45 +66,49 @@ func finalizer(a *adapter) {
 	a.close()
 }
 
-// NewAdapter is the constructor for Adapter. If database name is not provided
-// in the Mongo URL, 'casbin' will be used as database name.
-func NewAdapter(url string) persist.Adapter {
-	cstring, err := connstring.Parse(url)
-
-	if err != nil {
-		panic(err)
-	}
-
+// NewAdapter is the constructor for Adapter.
+func NewAdapter(url string, opts ...func(*adapter)) persist.Adapter {
 	cl, err := mongo.NewClient(options.Client().ApplyURI(url))
 
 	if err != nil {
 		panic(err)
 	}
-	a := &adapter{client: cl}
-	a.filtered = false
+	a := &adapter{client: cl, filtered: false, databaseName: "casbin"}
 
-	if len(cstring.Database) > 0 {
-		a.databaseName = cstring.Database
-	} else {
-		a.databaseName = "casbin"
+	for _, opt := range opts {
+		opt(a)
 	}
 
 	// Open the DB, create it if not existed.
 	a.open()
 
-	// Call the destructor when the object is released.
+	// Call the destructor when the object is released
 	runtime.SetFinalizer(a, finalizer)
 
 	return a
 
 }
 
+// NewAdapterFromClient creates a new adapter from an existing connected mongodb client.
+// Intended for reusing an already established client connection.
+// Opening and Closing client connection will not be handled by the adapter.
+func NewAdapterFromClient(cl *mongo.Client, opts ...func(*adapter)) persist.Adapter {
+	a := &adapter{client: cl, filtered: false, databaseName: "casbin"}
+
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	a.prep()
+
+	return a
+}
+
 // NewFilteredAdapter is the constructor for FilteredAdapter.
 // Casbin will not automatically call LoadPolicy() for a filtered adapter.
-func NewFilteredAdapter(url string) persist.FilteredAdapter {
-	a := NewAdapter(url).(*adapter)
+func NewFilteredAdapter(url string, opts ...func(*adapter)) persist.FilteredAdapter {
+	a := NewAdapter(url, opts...).(*adapter)
 	a.filtered = true
-
 	return a
 }
 
@@ -104,6 +120,11 @@ func (a *adapter) open() {
 		panic(err)
 	}
 
+	a.prep()
+
+}
+
+func (a *adapter) prep() {
 	db := a.client.Database(a.databaseName)
 	collection := db.Collection("casbin_rule")
 	a.collection = collection
@@ -111,7 +132,7 @@ func (a *adapter) open() {
 	iview := collection.Indexes()
 
 	indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
-	ctx = context.TODO()
+	ctx := context.TODO()
 
 	for _, k := range indexes {
 		iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
@@ -121,17 +142,15 @@ func (a *adapter) open() {
 	}
 }
 
+// close disconnects the mongodb client. Called as a finalizer
 func (a *adapter) close() {
-	// TODO: handle cleanup
+	a.client.Disconnect(context.TODO())
 }
 
 func (a *adapter) dropTable() error {
 	err := a.collection.Drop(context.TODO())
 
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func loadPolicyLine(line CasbinRule, model model.Model) {

@@ -29,7 +29,12 @@ func main() {
 	// Or you can use an existing DB "abc" like this:
 	// The adapter will use the table named "casbin_rule".
 	// If it doesn't exist, the adapter will create it automatically.
-	// a := mongodbadapter.NewAdapter("mongodb://127.0.0.1:27017/abc")
+	// a := mongodbadapter.NewAdapter("mongodb://127.0.0.1:27017", mongodbadapter.DBName("abc") )
+
+	// You can also pass a connected *mongo.Client if you want to reuse one.
+	// The adapter will not be responsible for automatically connecting/disconnecting the client, though.
+	// client, _ := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://127.0.0.1:27017"))
+	// a := mongodbadapter.NewAdapterFromClient(client, mongodbadapter.DBName("abc") )
 
 	e := casbin.NewEnforcer("examples/rbac_model.conf", a)
 

@@ -15,21 +15,47 @@
 package mongodbadapter
 
 import (
+	"context"
 	"os"
 	"testing"
 
 	"github.com/casbin/casbin"
+	"github.com/casbin/casbin/persist"
 	"github.com/casbin/casbin/util"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var testDbURL = os.Getenv("TEST_MONGODB_URL")
+var testDbName = os.Getenv("TEST_CASBIN_DB")
+var testClient *mongo.Client
 
 func getDbURL() string {
 	if testDbURL == "" {
 		testDbURL = "mongodb://127.0.0.1:27017"
 	}
 	return testDbURL
+}
+
+func getDbName() string {
+	if testDbName == "" {
+		testDbName = "casbin"
+	}
+	return testDbName
+}
+
+func newTestAdapter() persist.Adapter {
+	return NewAdapter(getDbURL(), DBName(getDbName()))
+}
+
+func newTestFilteredAdapter() persist.Adapter {
+	return NewFilteredAdapter(getDbURL(), DBName(getDbName()))
+}
+
+func newTestAdapterFromClient() persist.Adapter {
+	testClient, _ = mongo.Connect(context.Background(), options.Client().ApplyURI(getDbURL()))
+	return NewAdapterFromClient(testClient, DBName(getDbName()))
 }
 
 func testGetPolicy(t *testing.T, e *casbin.Enforcer, res [][]string) {
@@ -47,7 +73,7 @@ func initPolicy(t *testing.T) {
 	// so we need to load the policy from the file adapter (.CSV) first.
 	e := casbin.NewEnforcer("examples/rbac_model.conf", "examples/rbac_policy.csv")
 
-	a := NewAdapter(getDbURL())
+	a := newTestAdapter()
 	// This is a trick to save the current policy to the DB.
 	// We can't call e.SavePolicy() because the adapter in the enforcer is still the file adapter.
 	// The current policy means the policy in the Casbin enforcer (aka in memory).
@@ -78,7 +104,8 @@ func TestAdapter(t *testing.T) {
 	// Now the DB has policy, so we can provide a normal use case.
 	// Create an adapter and an enforcer.
 	// NewEnforcer() will load the policy automatically.
-	a := NewAdapter(getDbURL())
+	a := newTestAdapterFromClient()
+	defer testClient.Disconnect(context.Background())
 
 	e := casbin.NewEnforcer("examples/rbac_model.conf", a)
 	testGetPolicy(t, e, [][]string{{"alice", "data1", "read"}, {"bob", "data2", "write"}, {"data2_admin", "data2", "read"}, {"data2_admin", "data2", "write"}})
@@ -140,7 +167,7 @@ func TestAdapter(t *testing.T) {
 	testGetPolicy(t, e, [][]string{})
 }
 func TestDeleteFilteredAdapter(t *testing.T) {
-	a := NewAdapter(getDbURL())
+	a := newTestFilteredAdapter()
 	e := casbin.NewEnforcer("examples/rbac_tenant_service.conf", a)
 
 	e.AddPolicy("domain1", "alice", "data3", "read", "accept", "service1")
@@ -171,7 +198,7 @@ func TestFilteredAdapter(t *testing.T) {
 	// Now the DB has policy, so we can provide a normal use case.
 	// Create an adapter and an enforcer.
 	// NewEnforcer() will load the policy automatically.
-	a := NewAdapter(getDbURL())
+	a := newTestAdapter()
 	e := casbin.NewEnforcer("examples/rbac_model.conf", a)
 
 	// Load filtered policies from the database.
