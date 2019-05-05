@@ -20,14 +20,14 @@ import (
 
 	"github.com/casbin/casbin"
 	"github.com/casbin/casbin/util"
-	"github.com/globalsign/mgo/bson"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 var testDbURL = os.Getenv("TEST_MONGODB_URL")
 
 func getDbURL() string {
 	if testDbURL == "" {
-		testDbURL = "127.0.0.1:27017"
+		testDbURL = "mongodb://127.0.0.1:27017"
 	}
 	return testDbURL
 }
@@ -55,9 +55,9 @@ func initPolicy(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-
 	// Clear the current policy.
 	e.ClearPolicy()
+
 	testGetPolicy(t, e, [][]string{})
 
 	// Load the policy from DB.
@@ -65,6 +65,7 @@ func initPolicy(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+
 	testGetPolicy(t, e, [][]string{{"alice", "data1", "read"}, {"bob", "data2", "write"}, {"data2_admin", "data2", "read"}, {"data2_admin", "data2", "write"}})
 }
 
@@ -78,9 +79,9 @@ func TestAdapter(t *testing.T) {
 	// Create an adapter and an enforcer.
 	// NewEnforcer() will load the policy automatically.
 	a := NewAdapter(getDbURL())
+
 	e := casbin.NewEnforcer("examples/rbac_model.conf", a)
 	testGetPolicy(t, e, [][]string{{"alice", "data1", "read"}, {"bob", "data2", "write"}, {"data2_admin", "data2", "read"}, {"data2_admin", "data2", "write"}})
-
 	// AutoSave is enabled by default.
 	// Now we disable it.
 	e.EnableAutoSave(false)

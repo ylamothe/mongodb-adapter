@@ -15,12 +15,18 @@
 package mongodbadapter
 
 import (
+	"context"
 	"errors"
+	"log"
 	"runtime"
 
 	"github.com/casbin/casbin/model"
 	"github.com/casbin/casbin/persist"
-	"github.com/globalsign/mgo"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/x/bsonx"
+	"go.mongodb.org/mongo-driver/x/network/connstring"
 )
 
 // CasbinRule represents a rule in Casbin.
@@ -36,10 +42,11 @@ type CasbinRule struct {
 
 // adapter represents the MongoDB adapter for policy storage.
 type adapter struct {
-	dialInfo   *mgo.DialInfo
-	session    *mgo.Session
-	collection *mgo.Collection
-	filtered   bool
+	client       *mongo.Client
+	database     *mongo.Database
+	collection   *mongo.Collection
+	databaseName string
+	filtered     bool
 }
 
 // finalizer is the destructor for adapter.
@@ -50,19 +57,25 @@ func finalizer(a *adapter) {
 // NewAdapter is the constructor for Adapter. If database name is not provided
 // in the Mongo URL, 'casbin' will be used as database name.
 func NewAdapter(url string) persist.Adapter {
-	dI, err := mgo.ParseURL(url)
+	cstring, err := connstring.Parse(url)
+
 	if err != nil {
 		panic(err)
 	}
 
-	return NewAdapterWithDialInfo(dI)
-}
+	cl, err := mongo.NewClient(options.Client().ApplyURI(url))
 
-// NewAdapterWithDialInfo is an alternative constructor for Adapter
-// that does the same as NewAdapter, but uses mgo.DialInfo instead of a Mongo URL
-func NewAdapterWithDialInfo(dI *mgo.DialInfo) persist.Adapter {
-	a := &adapter{dialInfo: dI}
+	if err != nil {
+		panic(err)
+	}
+	a := &adapter{client: cl}
 	a.filtered = false
+
+	if len(cstring.Database) > 0 {
+		a.databaseName = cstring.Database
+	} else {
+		a.databaseName = "casbin"
+	}
 
 	// Open the DB, create it if not existed.
 	a.open()
@@ -71,6 +84,7 @@ func NewAdapterWithDialInfo(dI *mgo.DialInfo) persist.Adapter {
 	runtime.SetFinalizer(a, finalizer)
 
 	return a
+
 }
 
 // NewFilteredAdapter is the constructor for FilteredAdapter.
@@ -83,49 +97,39 @@ func NewFilteredAdapter(url string) persist.FilteredAdapter {
 }
 
 func (a *adapter) open() {
-	// FailFast will cause connection and query attempts to fail faster when
-	// the server is unavailable, instead of retrying until the configured
-	// timeout period. Note that an unavailable server may silently drop
-	// packets instead of rejecting them, in which case it's impossible to
-	// distinguish it from a slow server, so the timeout stays relevant.
-	a.dialInfo.FailFast = true
+	ctx := context.TODO()
+	err := a.client.Connect(ctx)
 
-	if a.dialInfo.Database == "" {
-		a.dialInfo.Database = "casbin"
-	}
-
-	session, err := mgo.DialWithInfo(a.dialInfo)
 	if err != nil {
 		panic(err)
 	}
 
-	db := session.DB(a.dialInfo.Database)
-	collection := db.C("casbin_rule")
-
-	a.session = session
+	db := a.client.Database(a.databaseName)
+	collection := db.Collection("casbin_rule")
 	a.collection = collection
 
+	iview := collection.Indexes()
+
 	indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
+	ctx = context.TODO()
+
 	for _, k := range indexes {
-		if err := a.collection.EnsureIndexKey(k); err != nil {
+		iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
+		if _, err := iview.CreateOne(ctx, iModel); err != nil {
 			panic(err)
 		}
 	}
 }
 
 func (a *adapter) close() {
-	a.session.Close()
+	// TODO: handle cleanup
 }
 
 func (a *adapter) dropTable() error {
-	session := a.session.Copy()
-	defer session.Close()
+	err := a.collection.Drop(context.TODO())
 
-	err := a.collection.With(session).DropCollection()
 	if err != nil {
-		if err.Error() != "ns not found" {
-			return err
-		}
+		return err
 	}
 	return nil
 }
@@ -184,21 +188,28 @@ func (a *adapter) LoadPolicy(model model.Model) error {
 // the filter must be a valid MongoDB selector.
 func (a *adapter) LoadFilteredPolicy(model model.Model, filter interface{}) error {
 	if filter == nil {
+		filter = bson.D{}
 		a.filtered = false
 	} else {
 		a.filtered = true
 	}
-	line := CasbinRule{}
 
-	session := a.session.Copy()
-	defer session.Close()
+	ctx := context.TODO()
 
-	iter := a.collection.With(session).Find(filter).Iter()
-	for iter.Next(&line) {
-		loadPolicyLine(line, model)
+	cur, err := a.collection.Find(ctx, filter)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	return iter.Close()
+	for cur.Next(ctx) {
+		var line = CasbinRule{}
+		if err := cur.Decode(&line); err == nil {
+			loadPolicyLine(line, model)
+		}
+
+	}
+
+	return cur.Close(ctx)
 }
 
 // IsFiltered returns true if the loaded policy has been filtered.
@@ -258,38 +269,27 @@ func (a *adapter) SavePolicy(model model.Model) error {
 		}
 	}
 
-	session := a.session.Copy()
-	defer session.Close()
-
-	return a.collection.With(session).Insert(lines...)
+	ctx := context.TODO()
+	_, err := a.collection.InsertMany(ctx, lines)
+	return err
 }
 
 // AddPolicy adds a policy rule to the storage.
 func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
 	line := savePolicyLine(ptype, rule)
 
-	session := a.session.Copy()
-	defer session.Close()
-
-	return a.collection.With(session).Insert(line)
+	ctx := context.TODO()
+	_, err := a.collection.InsertOne(ctx, line)
+	return err
 }
 
 // RemovePolicy removes a policy rule from the storage.
 func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 	line := savePolicyLine(ptype, rule)
 
-	session := a.session.Copy()
-	defer session.Close()
-
-	if err := a.collection.With(session).Remove(line); err != nil {
-		switch err {
-		case mgo.ErrNotFound:
-			return nil
-		default:
-			return err
-		}
-	}
-	return nil
+	ctx := context.TODO()
+	_, err := a.collection.DeleteOne(ctx, line)
+	return err
 }
 
 // RemoveFilteredPolicy removes policy rules that match the filter from the storage.
@@ -328,9 +328,7 @@ func (a *adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 		}
 	}
 
-	session := a.session.Copy()
-	defer session.Close()
-
-	_, err := a.collection.With(session).RemoveAll(selector)
+	ctx := context.TODO()
+	_, err := a.collection.DeleteMany(ctx, selector)
 	return err
 }
