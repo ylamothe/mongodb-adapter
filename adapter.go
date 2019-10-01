@@ -19,12 +19,14 @@ import (
 	"errors"
 	"log"
 	"runtime"
+	"strings"
 
 	"github.com/casbin/casbin/model"
 	"github.com/casbin/casbin/persist"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/x/bsonx"
 )
 
 // CasbinRule represents a rule in Casbin.
@@ -45,6 +47,10 @@ type adapter struct {
 	databaseName string
 	filtered     bool
 }
+
+const (
+	defaultDatabase = "casbin"
+)
 
 // DBName sets the name of the database to be used by casbin
 func DBName(databaseName string) func(*adapter) {
@@ -72,7 +78,8 @@ func NewAdapter(url string, opts ...func(*adapter)) persist.Adapter {
 	if err != nil {
 		panic(err)
 	}
-	a := &adapter{client: cl, filtered: false, databaseName: "casbin"}
+	dbName := parseDatabase(url)
+	a := &adapter{client: cl, filtered: false, databaseName: dbName}
 
 	for _, opt := range opts {
 		opt(a)
@@ -88,10 +95,26 @@ func NewAdapter(url string, opts ...func(*adapter)) persist.Adapter {
 
 }
 
+func parseDatabase(uri string) string {
+	part := strings.Split(
+		strings.TrimPrefix(
+			strings.TrimPrefix(uri, "mongodb://"),
+			"mongodb+srv://"),
+		"?")[0]
+	if strings.Contains(part, "/") {
+		spl := strings.Split(part, "/")
+		if db := spl[len(spl)-1]; db != "" {
+			return db
+		}
+	}
+	return defaultDatabase
+}
+
 // NewAdapterFromClient creates a new adapter from an existing connected mongodb client.
 // Intended for reusing an already established client connection.
 // Opening and Closing client connection will not be handled by the adapter.
 func NewAdapterFromClient(cl *mongo.Client, opts ...func(*adapter)) persist.Adapter {
+
 	a := &adapter{client: cl, filtered: false, databaseName: "casbin"}
 
 	for _, opt := range opts {
@@ -128,17 +151,17 @@ func (a *adapter) prep() {
 	collection := db.Collection("casbin_rule")
 	a.collection = collection
 
-	// iview := collection.Indexes()
+	iview := collection.Indexes()
 
-	// indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
-	// ctx := context.TODO()
+	indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
+	ctx := context.TODO()
 
-	// for _, k := range indexes {
-	// 	iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
-	// 	if _, err := iview.CreateOne(ctx, iModel); err != nil {
-	// 		panic(err)
-	// 	}
-	// }
+	for _, k := range indexes {
+		iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
+		if _, err := iview.CreateOne(ctx, iModel); err != nil {
+			panic(err)
+		}
+	}
 }
 
 // close disconnects the mongodb client. Called as a finalizer
