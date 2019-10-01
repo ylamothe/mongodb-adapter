@@ -1,0 +1,19 @@
+package: github.com/ylamothe/mongodb-adapter
+import:
+- package: github.com/casbin/casbin
+  version: v1.5.0
+  subpackages:
+  - config
+  - effect
+  - model
+  - persist
+  - persist/file-adapter
+  - rbac
+  - rbac/default-role-manager
+  - util
+- package: go.mongodb.org/mongo-driver
+  version: ^1.0.0
+  subpackages:
+  - bson
+  - mongo
+  - mongo/options

@@ -25,7 +25,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/x/bsonx"
 )
 
 // CasbinRule represents a rule in Casbin.
@@ -129,17 +128,17 @@ func (a *adapter) prep() {
 	collection := db.Collection("casbin_rule")
 	a.collection = collection
 
-	iview := collection.Indexes()
+	// iview := collection.Indexes()
 
-	indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
-	ctx := context.TODO()
+	// indexes := []string{"ptype", "v0", "v1", "v2", "v3", "v4", "v5"}
+	// ctx := context.TODO()
 
-	for _, k := range indexes {
-		iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
-		if _, err := iview.CreateOne(ctx, iModel); err != nil {
-			panic(err)
-		}
-	}
+	// for _, k := range indexes {
+	// 	iModel := mongo.IndexModel{Keys: bsonx.Doc{{k, bsonx.Int32(1)}}}
+	// 	if _, err := iview.CreateOne(ctx, iModel); err != nil {
+	// 		panic(err)
+	// 	}
+	// }
 }
 
 // close disconnects the mongodb client. Called as a finalizer
